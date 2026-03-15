@@ -95,6 +95,9 @@ STARTERS = [
 GEMINI_MODEL    = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
 CT_ASSESS_RATIO = 0.70   # CT assessed value = 70 % of fair market value
 
+# Cloud Run sets K_SERVICE automatically; pyaudio mic doesn't work there
+IS_CLOUD_RUN = bool(os.getenv("K_SERVICE"))
+
 # ---------------------------------------------------------------------------
 # CSS
 # ---------------------------------------------------------------------------
@@ -446,6 +449,47 @@ def _direct_generate(query: str) -> None:
         st.session_state.waiting_response = False
 
 
+def _send_audio_query(audio_bytes: bytes, mime_type: str = "audio/wav") -> None:
+    """Send browser-recorded audio to Gemini generate_content (Cloud Run path).
+    Audio is sent as inline_data alongside the system prompt and context."""
+    st.session_state.agent_state = "thinking"
+    st.session_state.waiting_response = True
+    try:
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        audio_part = types.Part(
+            inline_data=types.Blob(mime_type=mime_type, data=audio_bytes)
+        )
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=build_context() + [
+                types.Content(role="user", parts=[
+                    types.Part(text="(Voice message — transcribe and answer)"),
+                    audio_part,
+                ])
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+            ),
+        )
+        penny = json.loads(response.text)
+        voice = penny.get("voice_response", "")
+        ui    = penny.get("ui_update", {})
+        if voice:
+            st.session_state.chat_history.append(
+                {"role": "assistant", "content": voice}
+            )
+        if ui:
+            _apply_ui_update(ui)
+    except Exception as exc:
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": f"_(Audio error: {exc})_"}
+        )
+    finally:
+        st.session_state.agent_state = "listening"
+        st.session_state.waiting_response = False
+
+
 # ---------------------------------------------------------------------------
 # Plotly helpers
 # ---------------------------------------------------------------------------
@@ -725,22 +769,38 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
-        # Mic toggle + text input
-        input_cols = st.columns([1, 5])
-        with input_cols[0]:
-            mic_label = "🎙️" if not st.session_state.mic_active else "🔴"
-            pulse_cls = "mic-pulse" if st.session_state.mic_active else ""
-            st.markdown(f'<div class="{pulse_cls}">', unsafe_allow_html=True)
-            if st.button(mic_label, key="mic_btn", help="Toggle microphone"):
-                st.session_state.mic_active = not st.session_state.mic_active
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with input_cols[1]:
-            user_input = st.chat_input(
-                placeholder="Ask about CT towns…",
-                key="chat_input",
+        # ── Voice input ───────────────────────────────────────────────────
+        if IS_CLOUD_RUN:
+            # Cloud Run: no pyaudio hardware — use browser recorder instead
+            recorded = st.audio_input(
+                "🎙️ Record a voice question",
+                key="audio_recorder",
             )
+            if recorded is not None:
+                audio_bytes = recorded.read()
+                mime = getattr(recorded, "type", "audio/wav") or "audio/wav"
+                st.session_state.chat_history.append(
+                    {"role": "user", "content": "🎙️ *(voice message)*"}
+                )
+                _send_audio_query(audio_bytes, mime)
+                st.rerun()
+        else:
+            # Local: pyaudio mic streaming via PennyAgent background thread
+            input_cols = st.columns([1, 5])
+            with input_cols[0]:
+                mic_label = "🎙️" if not st.session_state.mic_active else "🔴"
+                pulse_cls = "mic-pulse" if st.session_state.mic_active else ""
+                st.markdown(f'<div class="{pulse_cls}">', unsafe_allow_html=True)
+                if st.button(mic_label, key="mic_btn", help="Toggle microphone"):
+                    st.session_state.mic_active = not st.session_state.mic_active
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        # ── Text input ────────────────────────────────────────────────────
+        user_input = st.chat_input(
+            placeholder="Ask about CT towns…",
+            key="chat_input",
+        )
 
         # Resolve query (text input or starter chip)
         pending = st.session_state.pop("pending_query", None) \
