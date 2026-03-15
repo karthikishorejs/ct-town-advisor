@@ -29,8 +29,10 @@ data/pdf/
 *.swp
 *.DS_Store
 
-# Infra files (not needed inside container)
+# Infra files — exclude deploy/CI scripts, but keep runtime files needed in container
 infra/
+!infra/nginx.conf
+!infra/start.sh
 
 # Tests
 tests/
