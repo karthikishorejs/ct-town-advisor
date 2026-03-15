@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Penny — CT Town Advisor Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap');
+
+  :root {
+    --bg: #060b14;
+    --surface: #0d1626;
+    --surface2: #111f35;
+    --border: #1a2d45;
+    --cyan: #00d4ff;
+    --purple: #7c3aed;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --text: #e2e8f0;
+    --muted: #4a6080;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    padding: 48px 32px;
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+  }
+
+  .wrap { max-width: 1200px; margin: 0 auto; position: relative; }
+
+  /* HEADER */
+  header { text-align: center; margin-bottom: 64px; }
+  .badge {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    border: 1px solid rgba(0,212,255,0.3);
+    padding: 5px 14px;
+    border-radius: 2px;
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: clamp(32px, 5vw, 52px);
+    font-weight: 800;
+    letter-spacing: -1.5px;
+    background: linear-gradient(135deg, #fff 30%, var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 10px;
+  }
+  .sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  /* DIAGRAM */
+  .diagram { display: flex; flex-direction: column; gap: 0; }
+
+  /* ROW */
+  .row {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  /* CONNECTOR */
+  .connector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 12px 0;
+    position: relative;
+  }
+  .connector::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--border), var(--cyan), var(--border));
+    transform: translateX(-50%);
+  }
+  .conn-label {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--cyan);
+    z-index: 1;
+    letter-spacing: 1px;
+  }
+
+  /* LAYER LABEL */
+  .layer-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding-left: 2px;
+  }
+
+  /* NODE */
+  .node {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    position: relative;
+    transition: transform 0.2s;
+    min-width: 0;
+  }
+  .node:hover { transform: translateY(-2px); }
+  .node.cyan  { border-color: rgba(0,212,255,0.4);  box-shadow: 0 0 24px rgba(0,212,255,0.08); }
+  .node.purple{ border-color: rgba(124,58,237,0.4); box-shadow: 0 0 24px rgba(124,58,237,0.08); }
+  .node.green { border-color: rgba(16,185,129,0.4); box-shadow: 0 0 24px rgba(16,185,129,0.08); }
+  .node.amber { border-color: rgba(245,158,11,0.4); box-shadow: 0 0 24px rgba(245,158,11,0.08); }
+
+  .node-icon { font-size: 22px; margin-bottom: 10px; display: block; }
+  .node-title { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 5px; }
+  .node-desc  { font-size: 11px; color: var(--muted); font-family: 'Space Mono', monospace; line-height: 1.6; }
+
+  .tag {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    margin-top: 8px;
+  }
+  .tag.cyan   { background: rgba(0,212,255,0.12);  color: var(--cyan); }
+  .tag.purple { background: rgba(124,58,237,0.12); color: #a78bfa; }
+  .tag.green  { background: rgba(16,185,129,0.12); color: var(--green); }
+  .tag.amber  { background: rgba(245,158,11,0.12); color: var(--amber); }
+  .tag.red    { background: rgba(239,68,68,0.12);  color: #f87171; }
+
+  /* FLOW */
+  hr.div {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 48px 0 36px;
+  }
+
+  .flow-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+  }
+
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+    text-align: center;
+    flex: 1;
+    min-width: 100px;
+  }
+  .step span { display: block; font-size: 20px; margin-bottom: 6px; }
+
+  .arr { color: var(--cyan); font-size: 20px; flex-shrink: 0; }
+
+  /* TECH */
+  .tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .tech {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .tech .ti { font-size: 20px; flex-shrink: 0; }
+  .tech .tn { font-size: 12px; font-weight: 600; }
+  .tech .tr { font-size: 10px; color: var(--muted); font-family: 'Space Mono', monospace; }
+
+  footer {
+    text-align: center;
+    margin-top: 56px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="badge">Gemini Live Agent Challenge 2026</div>
+    <h1>Penny — CT Town Advisor</h1>
+    <p class="sub">System Architecture · Live Agents Category · github.com/karthikishorejs/ct-town-advisor</p>
+  </header>
+
+  <div class="diagram">
+
+    <!-- USER LAYER -->
+    <div class="layer-label">① User Interface — Streamlit</div>
+    <div class="row">
+      <div class="node cyan">
+        <span class="node-icon">🎙️</span>
+        <div class="node-title">Voice Input</div>
+        <div class="node-desc">PyAudio captures mic in real time. Streams 16kHz PCM audio chunks to Gemini Live API.</div>
+        <span class="tag cyan">PYAUDIO</span>
+      </div>
+      <div class="node cyan">
+        <span class="node-icon">💬</span>
+        <div class="node-title">Text Input</div>
+        <div class="node-desc">Streamlit text input + quick question chips. Sends via PennyAgent.send_text().</div>
+        <span class="tag cyan">STREAMLIT</span>
+      </div>
+      <div class="node cyan">
+        <span class="node-icon">🔊</span>
+        <div class="node-title">Voice Output</div>
+        <div class="node-desc">Streams 24kHz PCM audio from Gemini Live API to speakers. Interruption stops playback instantly.</div>
+        <span class="tag cyan">LIVE API STREAM</span>
+      </div>
+      <div class="node cyan">
+        <span class="node-icon">📈</span>
+        <div class="node-title">Live Charts + Map</div>
+        <div class="node-desc">Plotly bar/pie/radar charts update in sync with voice. CT choropleth map highlights towns mid-sentence.</div>
+        <span class="tag cyan">PLOTLY</span>
+      </div>
+    </div>
+
+    <div class="connector"><span class="conn-label">WebSocket · audio + JSON dual stream</span></div>
+
+    <!-- AGENT LAYER -->
+    <div class="layer-label">② Agent Layer — PennyAgent (google-genai SDK)</div>
+    <div class="row">
+      <div class="node purple">
+        <span class="node-icon">🧠</span>
+        <div class="node-title">Gemini Live API Session</div>
+        <div class="node-desc">gemini-2.5-flash-native-audio-latest. Full duplex audio. Built-in VAD for interruption detection. BidiGenerateContent.</div>
+        <span class="tag purple">GEMINI LIVE API</span>
+      </div>
+      <div class="node purple">
+        <span class="node-icon">↩️</span>
+        <div class="node-title">Interrupt Handler</div>
+        <div class="node-desc">When user speaks mid-response, stops audio playback instantly, flushes buffer, processes new input without delay.</div>
+        <span class="tag purple">FULL DUPLEX</span>
+      </div>
+      <div class="node purple">
+        <span class="node-icon">🔧</span>
+        <div class="node-title">Chart Parser</div>
+        <div class="node-desc">Parses Penny's JSON response in parallel with audio. Extracts voice_response + ui_update. Fires on_ui_update callback.</div>
+        <span class="tag purple">CHART PARSER</span>
+      </div>
+    </div>
+
+    <div class="connector"><span class="conn-label">system prompt injection</span></div>
+
+    <!-- CONTEXT LAYER -->
+    <div class="layer-label">③ Context Layer — context_builder.py</div>
+    <div class="row">
+      <div class="node green">
+        <span class="node-icon">📋</span>
+        <div class="node-title">System Prompt</div>
+        <div class="node-desc">Penny's persona, rules, and all 3 town JSON datasets embedded. Enforces strict JSON response format with voice_response + ui_update.</div>
+        <span class="tag green">1M TOKEN CONTEXT</span>
+      </div>
+      <div class="node green">
+        <span class="node-icon">🏘️</span>
+        <div class="node-title">Town Data Store</div>
+        <div class="node-desc">Wallingford ($204M · 24.12 mills) · North Haven ($137M · 29.46 mills) · Cheshire ($144M · 34.27 mills). Loaded at startup.</div>
+        <span class="tag green">STRUCTURED JSON</span>
+      </div>
+      <div class="node green">
+        <span class="node-icon">🎨</span>
+        <div class="node-title">Town Avatars</div>
+        <div class="node-desc">AI-generated avatar per town persona using Gemini image generation. Generated at startup, cached in /app/assets/.</div>
+        <span class="tag green">GEMINI IMAGEN</span>
+      </div>
+    </div>
+
+    <div class="connector"><span class="conn-label">one-time extraction</span></div>
+
+    <!-- DATA LAYER -->
+    <div class="layer-label">④ Data Layer — Ingestion Pipeline (runs once)</div>
+    <div class="row">
+      <div class="node amber">
+        <span class="node-icon">📄</span>
+        <div class="node-title">CT Town Budget PDFs</div>
+        <div class="node-desc">3 scanned 2025-26 municipal budget PDFs. Wallingford (88pp) · North Haven · Cheshire. Stored in /data/.</div>
+        <span class="tag amber">SCANNED PDFs</span>
+      </div>
+      <div class="node amber">
+        <span class="node-icon">👁️</span>
+        <div class="node-title">Gemini Vision Extractor</div>
+        <div class="node-desc">Sends full PDF to Gemini Vision in one shot. Extracts departments, mill rates, totals into structured JSON. Runs once per town.</div>
+        <span class="tag amber">GEMINI VISION</span>
+      </div>
+      <div class="node amber">
+        <span class="node-icon">☁️</span>
+        <div class="node-title">Google Cloud Run</div>
+        <div class="node-desc">Containerized Streamlit app. 2Gi RAM · 2 CPU · min 1 instance. GOOGLE_API_KEY via Secret Manager.</div>
+        <span class="tag amber">CLOUD RUN</span>
+      </div>
+    </div>
+
+  </div><!-- end diagram -->
+
+  <hr class="div">
+
+  <!-- QUERY FLOW -->
+  <div class="flow-title">End-to-End Query Flow</div>
+  <div class="flow">
+    <div class="step"><span>🎙️</span>User speaks</div>
+    <div class="arr">→</div>
+    <div class="step"><span>🌊</span>Audio streamed</div>
+    <div class="arr">→</div>
+    <div class="step"><span>🧠</span>Gemini Live processes</div>
+    <div class="arr">→</div>
+    <div class="step"><span>🔊</span>Voice response</div>
+    <div class="arr">→</div>
+    <div class="step"><span>📊</span>JSON parsed</div>
+    <div class="arr">→</div>
+    <div class="step"><span>📈</span>Chart renders live</div>
+    <div class="arr">→</div>
+    <div class="step"><span>🗺️</span>Map animates</div>
+  </div>
+
+  <hr class="div">
+
+  <!-- TECH STACK -->
+  <div class="flow-title">Full Tech Stack</div>
+  <div class="tech-grid">
+    <div class="tech"><span class="ti">⚡</span><div><div class="tn">Gemini Live API</div><div class="tr">Real-time voice I/O</div></div></div>
+    <div class="tech"><span class="ti">🤖</span><div><div class="tn">Gemini 2.5 Flash</div><div class="tr">Core AI model</div></div></div>
+    <div class="tech"><span class="ti">👁️</span><div><div class="tn">Gemini Vision</div><div class="tr">PDF extraction</div></div></div>
+    <div class="tech"><span class="ti">🎨</span><div><div class="tn">Gemini Imagen</div><div class="tr">Avatar generation</div></div></div>
+    <div class="tech"><span class="ti">🐍</span><div><div class="tn">Python + FastAPI</div><div class="tr">Backend</div></div></div>
+    <div class="tech"><span class="ti">🖥️</span><div><div class="tn">Streamlit</div><div class="tr">Frontend UI</div></div></div>
+    <div class="tech"><span class="ti">📊</span><div><div class="tn">Plotly</div><div class="tr">Live charts + map</div></div></div>
+    <div class="tech"><span class="ti">☁️</span><div><div class="tn">Google Cloud Run</div><div class="tr">Deployment</div></div></div>
+    <div class="tech"><span class="ti">🔐</span><div><div class="tn">Secret Manager</div><div class="tr">API key storage</div></div></div>
+    <div class="tech"><span class="ti">🎙️</span><div><div class="tn">PyAudio</div><div class="tr">Mic capture</div></div></div>
+  </div>
+
+  <footer>
+    PENNY · CT TOWN ADVISOR · GEMINI LIVE AGENT CHALLENGE 2026 · BUILT BY KARTHI SOUNDER
+  </footer>
+
+</div>
+</body>
+</html>

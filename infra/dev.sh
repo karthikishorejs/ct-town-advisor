@@ -17,6 +17,7 @@ fi
 
 export PYTHONPATH="$ROOT"
 export K_SERVICE="local-dev"   # makes app.main use the WebSocket voice component
+export PYTHONUNBUFFERED=1      # flush Python print() immediately so logs are visible
 
 cd "$ROOT"
 
@@ -61,7 +62,7 @@ NGINX
 
 # ── Start services ─────────────────────────────────────────────────────────
 echo "▶ Starting FastAPI on :8081…"
-uvicorn api.main:app --host 127.0.0.1 --port 8081 --log-level warning &
+uvicorn api.main:app --host 127.0.0.1 --port 8081 --log-level info &
 UVICORN_PID=$!
 
 echo "▶ Starting Streamlit on :8501…"

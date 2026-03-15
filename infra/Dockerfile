@@ -30,7 +30,8 @@ RUN chmod +x infra/start.sh
 
 # Environment variables (no secrets here — injected at runtime via Secret Manager)
 ENV PYTHONPATH=/app \
-    STREAMLIT_SERVER_HEADLESS=true
+    STREAMLIT_SERVER_HEADLESS=true \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
