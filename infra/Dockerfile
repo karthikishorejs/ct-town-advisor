@@ -1,10 +1,12 @@
 FROM python:3.11-slim
 
 # System dependencies
-# portaudio19-dev  — PyAudio mic streaming
-# ffmpeg           — audio format conversion
-# gcc / python3-dev — native extension builds (e.g. PyAudio)
+# nginx          — reverse proxy (routes :8080 → Streamlit :8501 and FastAPI :8081)
+# portaudio19-dev — PyAudio (local dev only; no-op on Cloud Run)
+# ffmpeg          — audio format conversion
+# gcc / python3-dev — native extension builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        nginx \
         portaudio19-dev \
         ffmpeg \
         gcc \
@@ -22,15 +24,14 @@ RUN pip install --upgrade pip \
 # Copy entire project
 COPY . .
 
+# Install nginx config and make start script executable
+COPY infra/nginx.conf /etc/nginx/nginx.conf
+RUN chmod +x infra/start.sh
+
 # Environment variables (no secrets here — injected at runtime via Secret Manager)
 ENV PYTHONPATH=/app \
-    STREAMLIT_SERVER_PORT=8080 \
-    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true
 
 EXPOSE 8080
 
-CMD ["streamlit", "run", "app/main.py", \
-     "--server.port=8080", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true"]
+CMD ["/app/infra/start.sh"]

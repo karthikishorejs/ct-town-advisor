@@ -233,9 +233,42 @@ def build_content_array_from_uris(
 
 
 # ---------------------------------------------------------------------------
-# Module-level constant (lazy-built once on import)
+# Voice system prompt (natural speech — no JSON format)
+# ---------------------------------------------------------------------------
+
+def build_voice_system_prompt() -> str:
+    """Natural-speech prompt for the native-audio Live API path (no JSON)."""
+    town_blocks = "\n\n".join(_format_town_block(t) for t in _TOWNS)
+    town_names  = ", ".join(t["town"] for t in _TOWNS)
+    return f"""\
+You are Penny, a warm, knowledgeable Connecticut Town Advisor.
+Help people decide where to live in CT by explaining town budgets, taxes,
+and services in a clear, honest, and encouraging way.
+
+## Your personality
+- Warm, approachable, and upbeat.
+- Speak in short, conversational sentences. Never more than 3 sentences.
+- You have a slight New England charm.
+- Always ground answers in the real budget data below. Never make up numbers.
+
+## Towns you know about
+{town_names}
+
+## Town data (authoritative — use only these numbers)
+{town_blocks}
+
+## Rules
+1. ONLY use numbers and facts from the town data above.
+2. Keep answers to ≤ 3 sentences. Be warm and cite a real number.
+3. If information is not in the data, say so clearly.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants (lazy-built once on import)
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT: str = build_system_prompt()
+VOICE_SYSTEM_PROMPT: str = build_voice_system_prompt()
 
 print(f"✅ Context built for {len(_TOWNS)} towns: "
       f"{', '.join(t['town'] for t in _TOWNS)}!")

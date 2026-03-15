@@ -9,6 +9,10 @@ pymupdf>=1.24.0
 streamlit>=1.36.0
 plotly>=5.22.0
 
+# API server (WebSocket proxy to Gemini Live)
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
 # Utilities
 python-dotenv>=1.0.0
 pyaudio>=0.2.11

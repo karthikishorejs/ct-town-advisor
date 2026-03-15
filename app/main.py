@@ -25,6 +25,7 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as st_components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -36,6 +37,13 @@ sys.path.insert(0, str(ROOT))
 
 from src.context_builder import SYSTEM_PROMPT, build_context, get_all_towns, get_town_data
 from src.live_agent import PennyAgent
+
+# Streamlit custom component: browser WebSocket audio (Cloud Run voice path)
+_AUDIO_COMPONENT_PATH = ROOT / "app" / "components" / "audio_component"
+_audio_ws_component = st_components.declare_component(
+    "audio_ws",
+    path=str(_AUDIO_COMPONENT_PATH),
+)
 
 # ---------------------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -295,18 +303,19 @@ h1, h2, h3, h4, p, span, div, label {{ color: {TEXT}; }}
 
 def _init_session_state() -> None:
     defaults: dict = {
-        "active_town":        None,
-        "current_chart_data": None,
-        "show_calculator":    False,
-        "show_listings":      False,
-        "highlight_towns":    [],
-        "agent_state":        "ready",
-        "chat_history":       [],
-        "penny_agent":        None,
-        "agent_thread":       None,
-        "mic_active":         False,
-        "pending_query":      None,
-        "waiting_response":   False,
+        "active_town":         None,
+        "current_chart_data":  None,
+        "show_calculator":     False,
+        "show_listings":       False,
+        "highlight_towns":     [],
+        "agent_state":         "ready",
+        "chat_history":        [],
+        "penny_agent":         None,
+        "agent_thread":        None,
+        "mic_active":          False,
+        "pending_query":       None,
+        "waiting_response":    False,
+        "last_voice_turn_id":  -1,   # dedup WebSocket voice turns
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -771,19 +780,22 @@ def main() -> None:
 
         # ── Voice input ───────────────────────────────────────────────────
         if IS_CLOUD_RUN:
-            # Cloud Run: no pyaudio hardware — use browser recorder instead
-            recorded = st.audio_input(
-                "🎙️ Record a voice question",
-                key="audio_recorder",
-            )
-            if recorded is not None:
-                audio_bytes = recorded.read()
-                mime = getattr(recorded, "type", "audio/wav") or "audio/wav"
-                st.session_state.chat_history.append(
-                    {"role": "user", "content": "🎙️ *(voice message)*"}
-                )
-                _send_audio_query(audio_bytes, mime)
-                st.rerun()
+            # Cloud Run: browser WebSocket audio component
+            # Browser mic → WebSocket → FastAPI → Gemini Live
+            voice_result = _audio_ws_component(key="voice_ws", default=None)
+            if (
+                voice_result is not None
+                and voice_result.get("type") == "turn_complete"
+                and voice_result.get("turn_id", -1)
+                    > st.session_state.last_voice_turn_id
+            ):
+                st.session_state.last_voice_turn_id = voice_result["turn_id"]
+                text = voice_result.get("text", "").strip()
+                if text:
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": text}
+                    )
+                    st.rerun()
         else:
             # Local: pyaudio mic streaming via PennyAgent background thread
             input_cols = st.columns([1, 5])

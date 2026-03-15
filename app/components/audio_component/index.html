@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Penny Voice</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+    font-family: Inter, sans-serif;
+  }
+  #btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    background: linear-gradient(135deg, #111827, #0d1520);
+    color: #00d4ff;
+    border: 1px solid rgba(0,212,255,0.33);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    outline: none;
+  }
+  #btn:hover {
+    background: linear-gradient(135deg, #162040, #0e1c30);
+    border-color: #00d4ff;
+    box-shadow: 0 0 14px rgba(0,212,255,0.27);
+  }
+  #btn.active {
+    background: linear-gradient(135deg, #062038, #040e1e);
+    border-color: #00d4ff;
+    animation: pulse 1.4s ease-out infinite;
+  }
+  #btn.speaking {
+    background: linear-gradient(135deg, #062038, #040e1e);
+    border-color: #00ff88;
+    color: #00ff88;
+  }
+  #status {
+    font-size: 0.72rem;
+    color: #8899aa;
+    margin-top: 4px;
+    text-align: center;
+    min-height: 16px;
+  }
+  #error { color: #ff6b6b; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(0,212,255,0.53); }
+    70%  { box-shadow: 0 0 0 10px rgba(0,212,255,0); }
+    100% { box-shadow: 0 0 0 0  rgba(0,212,255,0); }
+  }
+  .wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button id="btn" onclick="toggleMic()">🎙️ Talk to Penny</button>
+  <div id="status"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Streamlit component protocol
+// ---------------------------------------------------------------------------
+const Streamlit = {
+  _ready: false,
+  _turnId: 0,
+
+  setComponentReady() {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 },
+      "*"
+    );
+    this._ready = true;
+  },
+
+  setComponentValue(value) {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:setComponentValue",
+        value, dataType: "json" },
+      "*"
+    );
+  },
+
+  setFrameHeight(h) {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h },
+      "*"
+    );
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Audio constants
+// ---------------------------------------------------------------------------
+const INPUT_SAMPLE_RATE  = 16000;   // what Gemini Live expects
+const OUTPUT_SAMPLE_RATE = 24000;   // what Gemini Live sends back
+const SCRIPT_PROC_FRAMES = 4096;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let ws = null;
+let audioCtx = null;
+let micStream = null;
+let scriptProc = null;
+let nextPlayTime = 0;
+let isActive = false;
+
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+function setStatus(msg, isErr = false) {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = isErr ? "error" : "";
+}
+
+function setBtn(state) {
+  const btn = document.getElementById("btn");
+  btn.className = state;
+  if (state === "active") {
+    btn.textContent = "🔴 Listening…";
+  } else if (state === "speaking") {
+    btn.textContent = "🗣️ Penny is speaking…";
+  } else {
+    btn.textContent = "🎙️ Talk to Penny";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Downsampling: Float32 @ browserRate → Int16 @ 16 kHz
+// ---------------------------------------------------------------------------
+function downsampleToInt16(float32buf, fromRate, toRate) {
+  const ratio = fromRate / toRate;
+  const outLen = Math.floor(float32buf.length / ratio);
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const srcIdx = Math.min(Math.floor(i * ratio), float32buf.length - 1);
+    const v = Math.max(-1, Math.min(1, float32buf[srcIdx]));
+    out[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Playback: enqueue Int16 PCM chunks at 24 kHz
+// ---------------------------------------------------------------------------
+function enqueueAudio(int16Data) {
+  if (!audioCtx) return;
+  const float32 = new Float32Array(int16Data.length);
+  for (let i = 0; i < int16Data.length; i++) {
+    float32[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF);
+  }
+  const buf = audioCtx.createBuffer(1, float32.length, OUTPUT_SAMPLE_RATE);
+  buf.copyToChannel(float32, 0);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const startAt = Math.max(audioCtx.currentTime, nextPlayTime);
+  src.start(startAt);
+  nextPlayTime = startAt + buf.duration;
+}
+
+// ---------------------------------------------------------------------------
+// Start/stop mic
+// ---------------------------------------------------------------------------
+async function startMic() {
+  try {
+    audioCtx = new AudioContext();
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl:  true,
+      }
+    });
+    const source = audioCtx.createMediaStreamSource(micStream);
+    scriptProc = audioCtx.createScriptProcessor(SCRIPT_PROC_FRAMES, 1, 1);
+    const browserRate = audioCtx.sampleRate;
+
+    scriptProc.onaudioprocess = (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      const int16 = downsampleToInt16(float32, browserRate, INPUT_SAMPLE_RATE);
+      ws.send(int16.buffer);
+    };
+
+    source.connect(scriptProc);
+    scriptProc.connect(audioCtx.destination);
+  } catch (err) {
+    setStatus("Mic error: " + err.message, true);
+    throw err;
+  }
+}
+
+function stopMic() {
+  if (scriptProc) { scriptProc.disconnect(); scriptProc = null; }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  nextPlayTime = 0;
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket
+// ---------------------------------------------------------------------------
+function wsUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return proto + "//" + location.host + "/ws/audio";
+}
+
+function openWs() {
+  ws = new WebSocket(wsUrl());
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    setStatus("Connected — speak now");
+    setBtn("active");
+  };
+
+  ws.onmessage = (evt) => {
+    if (typeof evt.data === "string") {
+      // JSON control message
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "turn_complete") {
+          setBtn("active");
+          setStatus("Connected — speak now");
+          if (msg.text) {
+            Streamlit._turnId++;
+            Streamlit.setComponentValue({
+              type: "turn_complete",
+              text: msg.text,
+              turn_id: Streamlit._turnId,
+            });
+          }
+        } else if (msg.type === "interrupted") {
+          setBtn("active");
+          setStatus("Connected — speak now");
+        } else if (msg.type === "error") {
+          setStatus("Error: " + msg.message, true);
+        }
+      } catch (_) {}
+    } else {
+      // Binary audio chunk
+      setBtn("speaking");
+      setStatus("Penny is speaking…");
+      const int16 = new Int16Array(evt.data);
+      enqueueAudio(int16);
+    }
+  };
+
+  ws.onerror = () => setStatus("WebSocket error", true);
+  ws.onclose = () => {
+    if (isActive) {
+      setStatus("Disconnected", true);
+      setBtn("");
+      isActive = false;
+    }
+  };
+}
+
+function closeWs() {
+  if (ws) { ws.close(); ws = null; }
+}
+
+// ---------------------------------------------------------------------------
+// Toggle
+// ---------------------------------------------------------------------------
+async function toggleMic() {
+  if (!isActive) {
+    // Start
+    isActive = true;
+    setStatus("Connecting…");
+    try {
+      await startMic();
+      openWs();
+    } catch (_) {
+      isActive = false;
+      stopMic();
+    }
+  } else {
+    // Stop
+    isActive = false;
+    stopMic();
+    closeWs();
+    setBtn("");
+    setStatus("");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+window.addEventListener("load", () => {
+  Streamlit.setComponentReady();
+  Streamlit.setFrameHeight(80);
+});
+</script>
+</body>
+</html>
