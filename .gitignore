@@ -27,3 +27,4 @@ data/.file_api_cache.json
 *.swp
 
 .claude/settings.local.json
+.DS_Store

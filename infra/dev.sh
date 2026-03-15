@@ -7,6 +7,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 
+# ── Activate the shared venv (one level up from project root) ─────────────
+VENV_DIR="$(dirname "$ROOT")/.venv"
+if [[ -f "$VENV_DIR/bin/activate" ]]; then
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/bin/activate"
+    echo "▶ Activated venv: $VENV_DIR"
+else
+    echo "⚠️  No .venv found at $VENV_DIR — falling back to PATH uvicorn/streamlit"
+fi
+
 # Load .env
 ENV_FILE="$ROOT/.env"
 if [[ -f "$ENV_FILE" ]]; then
@@ -41,7 +51,7 @@ http {
         ''      close;
     }
     server {
-        listen 8080;
+        listen 3000;
         location /ws/ {
             proxy_pass         http://127.0.0.1:8081;
             proxy_http_version 1.1;
@@ -76,12 +86,12 @@ STREAMLIT_PID=$!
 
 sleep 3
 
-echo "▶ Starting nginx on :8080…"
+echo "▶ Starting nginx on :3000..."
 nginx -c "$DEV_NGINX_CONF" -g 'daemon off;' &
 NGINX_PID=$!
 
 echo ""
-echo "✅ Penny is running at  http://localhost:8080"
+echo "✅ Penny is running at  http://localhost:3000"
 echo "   FastAPI   → :8081"
 echo "   Streamlit → :8501"
 echo "   Press Ctrl-C to stop all services."

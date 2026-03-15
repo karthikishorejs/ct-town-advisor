@@ -261,15 +261,21 @@ function openWs() {
     }
   };
 
-  ws.onerror = () => setStatus("WebSocket error", true);
-  ws.onclose = () => {
+  ws.onerror = (e) => {
+    console.error("[ws] onerror", e);
+    setStatus("WebSocket error", true);
+  };
+  ws.onclose = (e) => {
+    console.warn("[ws] onclose code=" + e.code + " reason=" + (e.reason||"") + " wasClean=" + e.wasClean);
     if (isActive) {
       // Server closed the connection (e.g. session timeout or error).
       // Stop the mic so the browser releases the audio track.
       isActive = false;
       stopMic();
       setBtn("");
-      setStatus("Disconnected — click to reconnect", true);
+      // Show the close code so we can diagnose the disconnect reason:
+      // 1000=normal, 1001=page navigated, 1006=abnormal/no-frame
+      setStatus("Disconnected (code " + e.code + ") — click to reconnect", true);
     }
   };
 }

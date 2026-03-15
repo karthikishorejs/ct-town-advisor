@@ -57,10 +57,10 @@ async def _recv_from_browser(
             chunks_sent += 1
             if chunks_sent % 50 == 0:   # log every ~4 s of audio
                 print(f"[recv] {chunks_sent} audio chunks sent to Gemini")
-    except (WebSocketDisconnect, RuntimeError):
-        pass
+    except (WebSocketDisconnect, RuntimeError) as exc:
+        print(f"[recv] closed — {type(exc).__name__}")
     except Exception as exc:
-        print(f"[recv] ERROR: {exc}")
+        print(f"[recv] ERROR {type(exc).__name__}: {exc}")
     finally:
         print(f"[recv] done — {chunks_sent} total chunks sent")
         stop.set()
@@ -137,14 +137,23 @@ async def _send_to_browser(
             # so _recv_from_browser can continue streaming audio in
             await asyncio.sleep(0.05)
 
-    except (WebSocketDisconnect, RuntimeError):
-        pass
+    except (WebSocketDisconnect, RuntimeError) as exc:
+        print(f"[send] closed — {type(exc).__name__}")
     except Exception as exc:
-        print(f"[send] ERROR: {exc}")
+        print(f"[send] ERROR {type(exc).__name__}: {exc}")
     finally:
         print(f"[send] done — {audio_frames_sent} audio frames sent to browser")
         stop.set()
 
+async def _await_send_drain(send_task: asyncio.Task, timeout_s: float = 6.0) -> None:
+    """Allow Gemini -> browser responses to flush after mic input stops."""
+    try:
+        await asyncio.wait_for(send_task, timeout=timeout_s)
+        print("[proxy] send loop finished naturally")
+    except asyncio.TimeoutError:
+        print(f"[proxy] send loop still running after {timeout_s:.1f}s — cancelling")
+        send_task.cancel()
+        await asyncio.gather(send_task, return_exceptions=True)
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
@@ -175,10 +184,20 @@ async def audio_proxy(websocket: WebSocket) -> None:
             _done, pending = await asyncio.wait(
                 [t1, t2], return_when=asyncio.FIRST_COMPLETED
             )
-            print("[proxy] one task done, cancelling the other")
-            stop.set()
+            if t1.done() and not t2.done():
+                # The browser stopped streaming mic audio. Give Gemini a short
+                # window to finish generating/sending the response audio.
+                print("[proxy] mic stream ended; waiting for send loop to drain")
+                await _await_send_drain(t2)
+            elif t2.done() and not t1.done():
+                print("[proxy] send loop ended first; stopping receive loop")
+                stop.set()
+                t1.cancel()
+                await asyncio.gather(t1, return_exceptions=True)
+
             for task in pending:
-                task.cancel()
+                if not task.done():
+                    task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             print("[proxy] session closed")
 
