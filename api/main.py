@@ -79,54 +79,63 @@ async def _send_to_browser(
     """
     accumulated_transcript = ""
     audio_frames_sent = 0
-    print("[send] starting session.receive() loop")
+    print("[send] starting receive loop")
     try:
-        async for response in session.receive():
-            if stop.is_set():
-                break
+        # session.receive() is finite per-turn — it yields messages until
+        # turn_complete, then the async-for exhausts.  The outer while loop
+        # re-enters it for every subsequent turn so Penny can answer multiple
+        # questions without the user having to reconnect.
+        while not stop.is_set():
+            async for response in session.receive():
+                if stop.is_set():
+                    break
 
-            sc = response.server_content
+                sc = response.server_content
 
-            # ── Audio chunks → binary frame ──────────────────────────────
-            audio_sent_this_msg = False
-            if sc and sc.model_turn:
-                for part in sc.model_turn.parts:
-                    if part.inline_data and part.inline_data.data:
-                        await websocket.send_bytes(part.inline_data.data)
-                        audio_frames_sent += 1
-                        audio_sent_this_msg = True
+                # ── Audio chunks → binary frame ──────────────────────────
+                audio_sent_this_msg = False
+                if sc and sc.model_turn:
+                    for part in sc.model_turn.parts:
+                        if part.inline_data and part.inline_data.data:
+                            await websocket.send_bytes(part.inline_data.data)
+                            audio_frames_sent += 1
+                            audio_sent_this_msg = True
 
-            # Older SDK versions surface audio at top-level response.data
-            if not audio_sent_this_msg and response.data:
-                await websocket.send_bytes(response.data)
-                audio_frames_sent += 1
+                # Older SDK versions surface audio at top-level response.data
+                if not audio_sent_this_msg and response.data:
+                    await websocket.send_bytes(response.data)
+                    audio_frames_sent += 1
 
-            if audio_sent_this_msg:
-                print(f"[send] audio frame #{audio_frames_sent} → browser")
+                if audio_sent_this_msg:
+                    print(f"[send] audio frame #{audio_frames_sent} → browser")
 
-            # ── Output transcription (what Gemini said) ───────────────────
-            if sc and sc.output_transcription:
-                chunk = (sc.output_transcription.text or "").strip()
-                if chunk:
-                    print(f"[send] transcript chunk: {chunk!r}")
-                    accumulated_transcript += " " + chunk
+                # ── Output transcription ──────────────────────────────────
+                if sc and sc.output_transcription:
+                    chunk = (sc.output_transcription.text or "").strip()
+                    if chunk:
+                        print(f"[send] transcript: {chunk!r}")
+                        accumulated_transcript += " " + chunk
 
-            # ── Interrupted ───────────────────────────────────────────────
-            if sc and getattr(sc, "interrupted", False):
-                print("[send] interrupted by user")
-                accumulated_transcript = ""
-                await websocket.send_text(
-                    json.dumps({"type": "interrupted"})
-                )
+                # ── Interrupted ───────────────────────────────────────────
+                if sc and getattr(sc, "interrupted", False):
+                    print("[send] interrupted")
+                    accumulated_transcript = ""
+                    await websocket.send_text(
+                        json.dumps({"type": "interrupted"})
+                    )
 
-            # ── Turn complete → send transcript ───────────────────────────
-            if sc and sc.turn_complete:
-                transcript = accumulated_transcript.strip()
-                accumulated_transcript = ""
-                print(f"[send] turn_complete, transcript={transcript!r}")
-                await websocket.send_text(
-                    json.dumps({"type": "turn_complete", "text": transcript})
-                )
+                # ── Turn complete → send transcript ───────────────────────
+                if sc and sc.turn_complete:
+                    transcript = accumulated_transcript.strip()
+                    accumulated_transcript = ""
+                    print(f"[send] turn_complete — transcript={transcript!r}")
+                    await websocket.send_text(
+                        json.dumps({"type": "turn_complete", "text": transcript})
+                    )
+
+            # session.receive() exhausted for this turn — yield briefly
+            # so _recv_from_browser can continue streaming audio in
+            await asyncio.sleep(0.05)
 
     except (WebSocketDisconnect, RuntimeError):
         pass

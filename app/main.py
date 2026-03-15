@@ -800,7 +800,10 @@ def main() -> None:
                     st.session_state.chat_history.append(
                         {"role": "assistant", "content": text}
                     )
-                    st.rerun()
+                    # Do NOT call st.rerun() here.
+                    # setComponentValue already triggers a Streamlit re-run.
+                    # A second st.rerun() causes a double re-render that can
+                    # reload the component iframe and kill the WebSocket.
         else:
             # Local: pyaudio mic streaming via PennyAgent background thread
             input_cols = st.columns([1, 5])

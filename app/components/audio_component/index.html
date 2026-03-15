@@ -264,9 +264,12 @@ function openWs() {
   ws.onerror = () => setStatus("WebSocket error", true);
   ws.onclose = () => {
     if (isActive) {
-      setStatus("Disconnected", true);
-      setBtn("");
+      // Server closed the connection (e.g. session timeout or error).
+      // Stop the mic so the browser releases the audio track.
       isActive = false;
+      stopMic();
+      setBtn("");
+      setStatus("Disconnected — click to reconnect", true);
     }
   };
 }
