@@ -77,7 +77,8 @@ and conversational, always references real numbers from the data>",
       ]
     },
     "show_listings": false,
-    "show_calculator": false
+    "show_calculator": false,
+    "calculator_home_price": null
   }
 }"""
 
@@ -159,9 +160,14 @@ figures.
 4. When the user asks about homes, buying, renting, or neighborhoods, \
 set show_listings to true.
 5. When the user asks about taxes, mill rate, or property tax calculations, \
-set show_calculator to true.
+set show_calculator to true. If the user mentions a specific home price \
+(e.g. "$500k", "500000", "a 500k home"), set calculator_home_price to that \
+number as an integer (e.g. 500000).
 6. highlight_towns must list every town mentioned in your response.
-7. active_town is the single town being focused on; null if comparing multiple.
+7. active_town: ALWAYS set this to a town name — never null.  For every \
+question, pick the most relevant or standout town.  For "best town for …" \
+pick the winner.  For comparisons, pick the town that leads in the comparison.  \
+For home/tax questions, pick the town being asked about.
 8. If no chart is relevant, set chart_type to "none" and leave x_labels \
 and datasets as empty arrays.
 9. chart values must be plain numbers (no commas, no $ symbols).

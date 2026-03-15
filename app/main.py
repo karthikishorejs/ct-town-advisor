@@ -14,13 +14,16 @@ Run with:
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import io
 import json
 import os
 import queue
 import sys
 import threading
 import time
+import wave  # noqa: E402 — stdlib, used for WAV packaging
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -316,6 +319,7 @@ def _init_session_state() -> None:
         "pending_query":       None,
         "waiting_response":    False,
         "last_voice_turn_id":  -1,   # dedup WebSocket voice turns
+        "pending_audio":       None,  # WAV bytes queued for playback
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -399,8 +403,10 @@ def _drain_queue() -> bool:
 
 
 def _apply_ui_update(ui: dict) -> None:
-    if ui.get("active_town"):
-        st.session_state.active_town = ui["active_town"]
+    # Always apply active_town — including null (clears persona card).
+    # Using "active_town" in ui to distinguish "not provided" from "set to null".
+    if "active_town" in ui:
+        st.session_state.active_town = ui["active_town"] or None
     if ui.get("highlight_towns"):
         st.session_state.highlight_towns = ui["highlight_towns"]
     chart = ui.get("chart", {})
@@ -408,8 +414,130 @@ def _apply_ui_update(ui: dict) -> None:
         st.session_state.current_chart_data = chart
     if ui.get("show_calculator"):
         st.session_state.show_calculator = True
+    if ui.get("calculator_home_price"):
+        try:
+            price = int(ui["calculator_home_price"])
+            # Clamp to slider range
+            price = max(100_000, min(1_000_000, price))
+            st.session_state.calculator_home_price = price
+        except (ValueError, TypeError):
+            pass
     if ui.get("show_listings"):
         st.session_state.show_listings = True
+
+
+# ---------------------------------------------------------------------------
+# Gemini TTS — speak text in Penny's voice via Live API
+# ---------------------------------------------------------------------------
+
+LIVE_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+
+
+async def _tts_via_gemini(text: str) -> bytes | None:
+    """Send text to Gemini Live API and return WAV audio bytes."""
+    try:
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(
+                role="system",
+                parts=[types.Part(text=(
+                    "You are Penny, a warm Connecticut Town Advisor. "
+                    "Read the following text aloud in a friendly, natural tone. "
+                    "Say ONLY what is given — do not add or change anything."
+                ))],
+            ),
+        )
+        audio_chunks: list[bytes] = []
+        async with client.aio.live.connect(
+            model=LIVE_MODEL, config=config
+        ) as session:
+            await session.send_client_content(
+                turns=[types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"Read this aloud: {text}")],
+                )],
+                turn_complete=True,
+            )
+            async for response in session.receive():
+                sc = response.server_content
+                if sc and sc.model_turn:
+                    for part in sc.model_turn.parts:
+                        if part.inline_data and part.inline_data.data:
+                            audio_chunks.append(part.inline_data.data)
+                if sc and sc.turn_complete:
+                    break
+
+        if not audio_chunks:
+            return None
+
+        # Concatenate PCM and wrap in WAV (24 kHz, mono, 16-bit)
+        pcm = b"".join(audio_chunks)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(pcm)
+        return buf.getvalue()
+    except Exception as exc:
+        print(f"[tts] Gemini TTS failed: {exc}")
+        return None
+
+
+def _generate_penny_audio(text: str) -> bytes | None:
+    """Blocking wrapper — runs the async TTS in a fresh event loop."""
+    if not text or len(text) < 5:
+        return None
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_tts_via_gemini(text))
+    finally:
+        loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Voice → UI extraction (lightweight follow-up after Live API transcript)
+# ---------------------------------------------------------------------------
+
+def _extract_ui_from_voice(transcript: str) -> None:
+    """Parse Penny's voice transcript to drive charts, persona, calculator.
+
+    Makes a quick generate_content call that takes what Penny said and
+    returns the matching ui_update JSON (chart, active_town, etc.).
+    The voice_response is ignored — it's already in chat from the Live API.
+    """
+    if not transcript or len(transcript) < 10:
+        return
+    try:
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        prompt = (
+            "Penny (the CT Town Advisor) just gave this voice response to a "
+            "user question.  Based on what she said, generate the matching "
+            "ui_update JSON.  Set voice_response to an empty string — it is "
+            "already displayed.\n\n"
+            f'Penny said: "{transcript}"'
+        )
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=build_context() + [
+                types.Content(role="user", parts=[types.Part(text=prompt)])
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+            ),
+        )
+        result = json.loads(response.text)
+        ui = result.get("ui_update", {})
+        if ui:
+            _apply_ui_update(ui)
+            print(f"[voice-ui] applied: active_town={ui.get('active_town')}, "
+                  f"chart={ui.get('chart', {}).get('chart_type', 'none')}, "
+                  f"calculator={ui.get('show_calculator')}, "
+                  f"listings={ui.get('show_listings')}")
+    except Exception as exc:
+        print(f"[voice-ui] extraction failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +575,10 @@ def _direct_generate(query: str) -> None:
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": voice}
             )
+            # Generate Penny's voice audio via Gemini Live API
+            wav = _generate_penny_audio(voice)
+            if wav:
+                st.session_state.pending_audio = wav
         if ui:
             _apply_ui_update(ui)
     except Exception as exc:
@@ -595,12 +727,12 @@ def _make_map(highlight_towns: list[str]) -> go.Figure:
     fig.update_layout(
         map=dict(
             style="carto-darkmatter",
-            zoom=10.5,
-            center=dict(lat=41.44, lon=-72.86),
+            zoom=9.8,
+            center=dict(lat=41.445, lon=-72.862),
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor=BG,
-        height=220,
+        height=260,
     )
     return fig
 
@@ -678,6 +810,79 @@ def _render_persona_card(town_name: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Zillow listings
+# ---------------------------------------------------------------------------
+
+# Zillow search URL slug per town
+_ZILLOW_SLUGS: dict[str, str] = {
+    "Wallingford": "wallingford-ct",
+    "North Haven": "north-haven-ct",
+    "Cheshire":    "cheshire-ct",
+}
+
+
+def _render_listings(focus_town: str | None) -> None:
+    """Show Zillow listing links + median home price for each town."""
+    st.markdown(
+        '<div class="section-header">🏡 Homes for Sale</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Determine which towns to show — focus town first, then the rest
+    all_names = [t["town"] for t in get_all_towns()]
+    if focus_town and focus_town in all_names:
+        ordered = [focus_town] + [t for t in all_names if t != focus_town]
+    else:
+        ordered = all_names
+
+    cards_html = ""
+    for town_name in ordered:
+        town = get_town_data(town_name)
+        color = TOWN_COLORS.get(town_name, ACCENT)
+        slug = _ZILLOW_SLUGS.get(town_name, town_name.lower().replace(" ", "-") + "-ct")
+        zillow_url = f"https://www.zillow.com/{slug}/"
+        median = town.get("median_home_price", 0)
+        median_str = f"${median:,}" if median else "N/A"
+        mill = town.get("mill_rate", 0)
+        is_focus = town_name == focus_town
+
+        # Estimate annual tax for median home
+        assessed = median * CT_ASSESS_RATIO
+        annual_tax = int(assessed * float(mill) / 1000) if mill else 0
+        tax_str = f"${annual_tax:,}/yr" if annual_tax else "N/A"
+
+        border_style = f"border-color:{color}66;" if is_focus else ""
+        glow_style = f"box-shadow:0 0 12px {color}33;" if is_focus else ""
+
+        cards_html += f"""
+<a href="{zillow_url}" target="_blank" rel="noopener"
+   style="text-decoration:none;color:inherit;display:block">
+<div style="background:{CARD_BG};border-radius:12px;padding:14px 16px;
+            border:1px solid {BORDER};margin-bottom:8px;
+            transition:all 0.2s;cursor:pointer;{border_style}{glow_style}">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <span style="font-weight:700;font-size:0.95rem;color:{color}">{town_name}</span>
+      <div style="font-size:0.72rem;color:{MUTED};margin-top:2px">
+        Median: {median_str} · Tax: {tax_str} · Mill rate: {mill}
+      </div>
+    </div>
+    <div style="font-size:0.78rem;color:{ACCENT};white-space:nowrap">
+      View on Zillow →
+    </div>
+  </div>
+</div>
+</a>"""
+
+    st.markdown(cards_html, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:0.68rem;color:{MUTED};margin-top:4px;text-align:center">'
+        f'Median prices from town budget data · Click a town to browse Zillow</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 
@@ -722,6 +927,12 @@ def _render_header() -> None:
 def main() -> None:
     _inject_css()
     _init_session_state()
+
+    # Track re-runs to diagnose WebSocket disconnects
+    if "rerun_count" not in st.session_state:
+        st.session_state.rerun_count = 0
+    st.session_state.rerun_count += 1
+    print(f"[streamlit] render #{st.session_state.rerun_count}")
 
     # PennyAgent uses pyaudio which requires a real audio device.
     # On Cloud Run (and Docker with K_SERVICE set) there is no audio hardware —
@@ -783,6 +994,12 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
+        # ── Penny's voice playback (Gemini TTS) ──────────────────────────
+        pending_audio = st.session_state.pop("pending_audio", None) \
+            if st.session_state.get("pending_audio") else None
+        if pending_audio:
+            st.audio(pending_audio, format="audio/wav", autoplay=True)
+
         # ── Voice input ───────────────────────────────────────────────────
         if IS_CLOUD_RUN:
             # Cloud Run: browser WebSocket audio component
@@ -800,6 +1017,9 @@ def main() -> None:
                     st.session_state.chat_history.append(
                         {"role": "assistant", "content": text}
                     )
+                    # Extract UI updates (chart, persona, calculator) from
+                    # the voice transcript via a quick generate_content call.
+                    _extract_ui_from_voice(text)
                     # Do NOT call st.rerun() here.
                     # setComponentValue already triggers a Streamlit re-run.
                     # A second st.rerun() causes a double re-render that can
@@ -877,11 +1097,12 @@ def main() -> None:
                         unsafe_allow_html=True)
             st.markdown('<div class="calc-panel">', unsafe_allow_html=True)
 
+            default_price = st.session_state.get("calculator_home_price", 400_000)
             home_price = st.slider(
                 "Home value",
                 min_value=100_000,
                 max_value=1_000_000,
-                value=400_000,
+                value=default_price,
                 step=10_000,
                 format="$%d",
                 key="calc_price",
@@ -909,6 +1130,14 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
             st.markdown("</div>", unsafe_allow_html=True)
+
+        # Listings panel (visible when Penny sets show_listings)
+        if st.session_state.show_listings:
+            st.markdown(
+                f'<hr style="border:1px solid {BORDER};margin:12px 0">',
+                unsafe_allow_html=True,
+            )
+            _render_listings(st.session_state.active_town)
 
     # ── Polling — keep UI live while agent is active ───────────────────────
     if st.session_state.waiting_response or \

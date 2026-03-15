@@ -114,6 +114,7 @@ let micStream = null;
 let scriptProc = null;
 let nextPlayTime = 0;
 let isActive = false;
+let waitingForResponse = false;
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -208,6 +209,12 @@ function stopMic() {
     micStream.getTracks().forEach(t => t.stop());
     micStream = null;
   }
+  // Do NOT close audioCtx here — we need it to play Penny's response.
+  // It gets closed in fullCleanup().
+}
+
+function fullCleanup() {
+  stopMic();
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   nextPlayTime = 0;
 }
@@ -235,8 +242,6 @@ function openWs() {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === "turn_complete") {
-          setBtn("active");
-          setStatus("Connected — speak now");
           if (msg.text) {
             Streamlit._turnId++;
             Streamlit.setComponentValue({
@@ -244,6 +249,21 @@ function openWs() {
               text: msg.text,
               turn_id: Streamlit._turnId,
             });
+          }
+          // If mic was stopped (waiting for response), close cleanly now.
+          if (waitingForResponse) {
+            waitingForResponse = false;
+            // Small delay so queued audio finishes playing
+            setTimeout(() => {
+              closeWs();
+              fullCleanup();
+              isActive = false;
+              setBtn("");
+              setStatus("Click to talk again");
+            }, 500);
+          } else {
+            setBtn("active");
+            setStatus("Connected — speak now");
           }
         } else if (msg.type === "interrupted") {
           setBtn("active");
@@ -269,12 +289,10 @@ function openWs() {
     console.warn("[ws] onclose code=" + e.code + " reason=" + (e.reason||"") + " wasClean=" + e.wasClean);
     if (isActive) {
       // Server closed the connection (e.g. session timeout or error).
-      // Stop the mic so the browser releases the audio track.
       isActive = false;
-      stopMic();
+      waitingForResponse = false;
+      fullCleanup();
       setBtn("");
-      // Show the close code so we can diagnose the disconnect reason:
-      // 1000=normal, 1001=page navigated, 1006=abnormal/no-frame
       setStatus("Disconnected (code " + e.code + ") — click to reconnect", true);
     }
   };
@@ -289,8 +307,9 @@ function closeWs() {
 // ---------------------------------------------------------------------------
 async function toggleMic() {
   if (!isActive) {
-    // Start
+    // ── Start recording ──────────────────────────────────────────
     isActive = true;
+    waitingForResponse = false;
     setStatus("Connecting…");
     try {
       await startMic();
@@ -299,13 +318,27 @@ async function toggleMic() {
       isActive = false;
       stopMic();
     }
-  } else {
-    // Stop
-    isActive = false;
+  } else if (!waitingForResponse) {
+    // ── Stop mic but keep WS open for Penny's response ───────────
     stopMic();
-    closeWs();
-    setBtn("");
-    setStatus("");
+    waitingForResponse = true;
+    setBtn("speaking");
+    setStatus("Waiting for Penny…");
+    // Tell the server we're done talking so it can trigger Gemini's VAD
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "mic_stopped" }));
+    }
+    // Timeout: if no response in 20s, clean up
+    setTimeout(() => {
+      if (waitingForResponse) {
+        waitingForResponse = false;
+        closeWs();
+        fullCleanup();
+        isActive = false;
+        setBtn("");
+        setStatus("No response — click to try again", true);
+      }
+    }, 20000);
   }
 }
 

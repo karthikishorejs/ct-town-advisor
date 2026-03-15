@@ -81,7 +81,9 @@ streamlit run app/main.py \
     --server.address=127.0.0.1 \
     --server.headless=true \
     --server.enableCORS=false \
-    --server.enableXsrfProtection=false &
+    --server.enableXsrfProtection=false \
+    --server.fileWatcherType=none \
+    --server.runOnSave=false &
 STREAMLIT_PID=$!
 
 sleep 3
