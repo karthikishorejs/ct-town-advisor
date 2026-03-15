@@ -722,9 +722,14 @@ def _render_header() -> None:
 def main() -> None:
     _inject_css()
     _init_session_state()
-    _init_agent()
 
-    # Drain any pending agent callbacks
+    # PennyAgent uses pyaudio which requires a real audio device.
+    # On Cloud Run (and Docker with K_SERVICE set) there is no audio hardware —
+    # voice input is handled by the browser WebSocket component instead.
+    if not IS_CLOUD_RUN:
+        _init_agent()
+
+    # Drain any pending agent callbacks (no-op on Cloud Run)
     _drain_queue()
 
     _render_header()
