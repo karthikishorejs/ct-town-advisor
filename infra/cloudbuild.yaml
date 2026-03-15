@@ -1,0 +1,44 @@
+steps:
+  # ── Step 1: Build Docker image ────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/ct-town-advisor:$BUILD_ID
+      - -f
+      - infra/Dockerfile
+      - .
+
+  # ── Step 2: Push to Artifact Registry ────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args:
+      - push
+      - gcr.io/$PROJECT_ID/ct-town-advisor:$BUILD_ID
+
+  # ── Step 3: Deploy to Cloud Run ──────────────────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ct-town-advisor
+      - --image=gcr.io/$PROJECT_ID/ct-town-advisor:$BUILD_ID
+      - --region=us-central1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=2Gi
+      - --cpu=2
+      - --min-instances=1
+      - --max-instances=3
+      # GOOGLE_API_KEY is pulled from Secret Manager — never baked into the image
+      - --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest
+
+# Keep the pushed image tagged in Artifact Registry
+images:
+  - gcr.io/$PROJECT_ID/ct-town-advisor:$BUILD_ID
+
+options:
+  logging: CLOUD_LOGGING_ONLY

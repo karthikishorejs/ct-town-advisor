@@ -1,42 +1,36 @@
-# ── Stage 1: build dependencies ──────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.11-slim
 
-WORKDIR /build
-
-COPY requirements.txt .
-RUN pip install --upgrade pip \
- && pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-
-# ── Stage 2: runtime image ───────────────────────────────────────────────────
-FROM python:3.12-slim
-
-LABEL org.opencontainers.image.title="CT Town Advisor"
-LABEL org.opencontainers.image.description="Gemini Live voice agent for CT town data"
-
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
+# System dependencies
+# portaudio19-dev  — PyAudio mic streaming
+# ffmpeg           — audio format conversion
+# gcc / python3-dev — native extension builds (e.g. PyAudio)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        portaudio19-dev \
+        ffmpeg \
+        gcc \
+        python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy source code
-COPY src/ ./src/
-COPY app/ ./app/
-COPY data/ ./data/
+# Install Python dependencies before copying source
+# (layer cached unless requirements.txt changes)
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Non-root user for security
-RUN adduser --disabled-password --gecos "" appuser \
- && chown -R appuser /app
-USER appuser
+# Copy entire project
+COPY . .
 
-EXPOSE 8501
+# Environment variables (no secrets here — injected at runtime via Secret Manager)
+ENV PYTHONPATH=/app \
+    STREAMLIT_SERVER_PORT=8080 \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
+    STREAMLIT_SERVER_HEADLESS=true
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
+EXPOSE 8080
 
-ENTRYPOINT ["streamlit", "run", "app/main.py", \
-            "--server.port=8501", \
-            "--server.address=0.0.0.0", \
-            "--server.headless=true", \
-            "--browser.gatherUsageStats=false"]
+CMD ["streamlit", "run", "app/main.py", \
+     "--server.port=8080", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true"]

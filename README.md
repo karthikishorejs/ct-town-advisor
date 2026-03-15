@@ -108,14 +108,45 @@ ct-town-advisor/
 
 ---
 
-## Docker
+## Deploy to Cloud Run
+
+### Prerequisites
+- [gcloud CLI](https://cloud.google.com/sdk/docs/install) installed and authenticated
+- A Google Cloud project with billing enabled
+- `GOOGLE_CLOUD_PROJECT` and `GOOGLE_API_KEY` set in your `.env`
+
+### One-time secret setup (first deploy only)
 
 ```bash
-# Local development
-docker compose -f infra/docker-compose.yml up --build
+chmod +x infra/setup_secrets.sh infra/deploy.sh
+./infra/setup_secrets.sh
+```
 
-# Production (Cloud Run)
-./infra/deploy.sh YOUR_GCP_PROJECT_ID us-east1
+This enables Secret Manager, stores your `GOOGLE_API_KEY` as a secret, and grants the Cloud Run and Cloud Build service accounts access to it — the key is never baked into the Docker image.
+
+### Deploy
+
+```bash
+./infra/deploy.sh
+```
+
+Cloud Build will build the image, push it to Artifact Registry, and deploy it to Cloud Run in `us-central1`. Open the printed URL when done.
+
+### What it provisions
+
+| Resource | Details |
+|---|---|
+| Cloud Run service | `ct-town-advisor` · `us-central1` · 2 vCPU / 2 GiB |
+| Scaling | min 1 · max 3 instances |
+| Secret | `GOOGLE_API_KEY` injected via Secret Manager at runtime |
+| Auth | Public (unauthenticated) |
+
+---
+
+## Docker (local)
+
+```bash
+docker compose -f infra/docker-compose.yml up --build
 ```
 
 ---

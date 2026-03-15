@@ -1,0 +1,39 @@
+# Secrets — never bake into image
+.env
+*.env
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PDFs — large files served from GCS, not needed in image
+data/pdf/
+*.pdf
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Dev tooling
+.claude/
+.idea/
+.vscode/
+*.swp
+*.DS_Store
+
+# Infra files (not needed inside container)
+infra/
+
+# Tests
+tests/
+
+# Docs
+README.md
