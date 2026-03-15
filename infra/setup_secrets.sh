@@ -90,6 +90,8 @@ fi
 echo ""
 
 # ── 4. Grant secret access to Cloud Run and Cloud Build service accounts ──────
+# CR_SA = Compute Engine default SA (used by Cloud Run AND modern Cloud Build)
+# CB_SA = legacy Cloud Build SA (kept for compatibility)
 CR_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 CB_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
 
@@ -100,6 +102,19 @@ for sa in "${CR_SA}" "${CB_SA}"; do
     --member="serviceAccount:${sa}" \
     --role="roles/secretmanager.secretAccessor" \
     --quiet 2>/dev/null && echo "  ✅ ${sa}" || echo "  ⚠️  ${sa} (may not exist yet — re-run after first build)"
+done
+echo ""
+
+# ── 5. Grant Cloud Build SA run.admin so it can set allUsers run.invoker ──────
+# Cloud Build runs step 4 (add-iam-policy-binding allUsers) as CR_SA.
+# That step needs run.services.setIamPolicy, which is part of roles/run.admin.
+echo "▶ Granting run.admin to Cloud Build service account..."
+for sa in "${CR_SA}" "${CB_SA}"; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${sa}" \
+    --role="roles/run.admin" \
+    --quiet 2>/dev/null && echo "  ✅ roles/run.admin → ${sa}" \
+    || echo "  ⚠️  ${sa} (may already be set or SA doesn't exist yet)"
 done
 echo ""
 
