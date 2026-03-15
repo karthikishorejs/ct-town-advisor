@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # deploy.sh — Build and deploy CT Town Advisor to Google Cloud Run
-# Usage: ./infra/deploy.sh
+# Usage: ./infra/deploy.sh  (from any directory)
 set -euo pipefail
+
+# ── Resolve project root from script location (works from any CWD) ───────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+ENV_FILE="${PROJECT_ROOT}/.env"
 
 # ── 1. Check prerequisites ────────────────────────────────────────────────────
 if ! command -v gcloud &>/dev/null; then
@@ -14,11 +19,11 @@ if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/nu
   exit 1
 fi
 
-# ── 2. Load project ID from .env ──────────────────────────────────────────────
-if [[ -f .env ]]; then
+# ── 2. Load .env (set -a exports every variable that gets sourced) ────────────
+if [[ -f "${ENV_FILE}" ]]; then
   set -a
-  # shellcheck disable=SC1091
-  source <(grep -v '^#' .env | grep '=')
+  # shellcheck source=/dev/null
+  source "${ENV_FILE}"
   set +a
 fi
 
@@ -27,8 +32,9 @@ REGION="us-central1"
 SERVICE="ct-town-advisor"
 
 if [[ -z "${PROJECT_ID}" ]]; then
-  echo "❌ Could not determine PROJECT_ID. Set GOOGLE_CLOUD_PROJECT in .env or run:"
-  echo "   gcloud config set project YOUR_PROJECT_ID"
+  echo "❌ Could not determine PROJECT_ID."
+  echo "   Add GOOGLE_CLOUD_PROJECT=<your-project-id> to .env"
+  echo "   or run: gcloud config set project YOUR_PROJECT_ID"
   exit 1
 fi
 
@@ -65,7 +71,7 @@ else
     echo "✅ Secret GOOGLE_API_KEY already exists."
   fi
 
-  # Grant Cloud Build SA access (needed to pass secret into Cloud Run at deploy time)
+  # Grant Cloud Build and Cloud Run SAs access to the secret
   PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
   CB_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
   CR_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
@@ -81,8 +87,9 @@ else
 fi
 echo ""
 
-# ── 5. Submit build and deploy ───────────────────────────────────────────────
+# ── 5. Submit build and deploy (run from project root for correct context) ────
 echo "▶ Submitting Cloud Build (this may take a few minutes)..."
+cd "${PROJECT_ROOT}"
 gcloud builds submit \
   --config=infra/cloudbuild.yaml \
   --project="${PROJECT_ID}" \

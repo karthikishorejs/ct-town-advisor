@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 # setup_secrets.sh — One-time Secret Manager setup for CT Town Advisor
 # Run this once before the first deployment.
-# Usage: ./infra/setup_secrets.sh
+# Usage: ./infra/setup_secrets.sh  (from any directory)
 set -euo pipefail
 
+# ── Resolve project root from script location (works from any CWD) ───────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+ENV_FILE="${PROJECT_ROOT}/.env"
+
 # ── Load .env ─────────────────────────────────────────────────────────────────
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source <(grep -v '^#' .env | grep '=')
-  set +a
-else
-  echo "❌ .env file not found. Copy .env.example → .env and fill in your values."
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "❌ .env not found at ${ENV_FILE}"
+  echo "   Copy .env.example → .env and fill in your values."
   exit 1
 fi
+
+# set -a auto-exports every variable that gets set; source reads .env as bash
+set -a
+# shellcheck source=/dev/null
+source "${ENV_FILE}"
+set +a
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 if [[ -z "${PROJECT_ID}" ]]; then
