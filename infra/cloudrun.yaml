@@ -1,0 +1,45 @@
+# Google Cloud Run service definition
+# Deploy with:
+#   gcloud run services replace infra/cloudrun.yaml --region=us-east1
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: ct-town-advisor
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/cpu-throttling: "false"   # keep CPU for audio streaming
+    spec:
+      containerConcurrency: 10
+      timeoutSeconds: 300
+      containers:
+        - image: gcr.io/YOUR_PROJECT_ID/ct-town-advisor:latest
+          ports:
+            - containerPort: 8501
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          env:
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ct-advisor-secrets
+                  key: GOOGLE_API_KEY
+            - name: GCS_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: ct-advisor-secrets
+                  key: GCS_BUCKET_NAME
+            - name: GEMINI_MODEL
+              value: gemini-2.0-flash-live-001
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+            initialDelaySeconds: 20
+            periodSeconds: 30

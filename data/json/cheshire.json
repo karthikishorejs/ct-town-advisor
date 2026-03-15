@@ -1,0 +1,53 @@
+{
+  "town": "Cheshire",
+  "budget_year": "FY2025",
+  "total_budget": 144383728,
+  "mill_rate": 34.0,
+  "median_home_price": 390000,
+  "population": 29000,
+  "persona": "The Safe Haven",
+  "persona_description": "Cheshire projects an image of a nurturing and secure community, dedicated to fostering a high quality of life for its residents. Its strong financial commitment to education and public safety underscores a priority for both the development and protection of its citizens, while a robust benefits program supports its valued municipal workforce.",
+  "departments": {
+    "education": {
+      "amount": 89542609,
+      "percent": 62.0
+    },
+    "public_safety": {
+      "amount": 9073375,
+      "percent": 6.3
+    },
+    "infrastructure": {
+      "amount": 7888688,
+      "percent": 5.5
+    },
+    "debt_service": {
+      "amount": 9221592,
+      "percent": 6.4
+    },
+    "health_services": {
+      "amount": 1854450,
+      "percent": 1.3
+    },
+    "administration": {
+      "amount": 26803014,
+      "percent": 18.6
+    }
+  },
+  "key_facts": [
+    "Education is the largest expenditure, accounting for approximately 62.0% of the total budget.",
+    "Public Safety, encompassing Police, Fire, and related services, represents about 6.3% of the budget.",
+    "Employee benefits constitute a significant portion of the budget, reflecting a commitment to staff welfare and retention.",
+    "The Human Resources Department saw a substantial percentage increase in its budget compared to the prior year.",
+    "The Town Attorney and Elections departments also experienced notable budget increases for FY2025."
+  ],
+  "strengths": [
+    "Strong investment in education indicates a focus on youth development and long-term community growth.",
+    "Prioritization of public safety ensures a secure environment for residents.",
+    "A robust employee benefits package supports a stable and motivated municipal workforce."
+  ],
+  "weaknesses": [
+    "Significant year-over-year percentage increases in some departmental budgets (e.g., Human Resources, Town Attorney, Elections) could signal rapidly expanding services or rising costs that require close monitoring.",
+    "The 'SAL ADJST' category showing large percentage swings across various departments makes it difficult to ascertain clear salary trend analysis without further detail.",
+    "A decrease in the Public Health budget might raise concerns about the scope or quality of health services offered to residents."
+  ]
+}

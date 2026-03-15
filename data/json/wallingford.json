@@ -1,0 +1,53 @@
+{
+  "town": "Wallingford",
+  "budget_year": "2025-2026",
+  "total_budget": 204050153,
+  "mill_rate": 24.12,
+  "median_home_price": 277618,
+  "population": 45000,
+  "persona": "The Education Champion",
+  "persona_description": "Wallingford strongly emphasizes educational excellence and robust social services, reflecting a commitment to its residents' well-being. The town also demonstrates fiscal prudence through careful budget management and a focus on maintaining a strong financial standing.",
+  "departments": {
+    "education": {
+      "amount": 121722102,
+      "percent": 59.7
+    },
+    "public_safety": {
+      "amount": 25505846,
+      "percent": 12.5
+    },
+    "infrastructure": {
+      "amount": 7287663,
+      "percent": 3.6
+    },
+    "debt_service": {
+      "amount": 6694695,
+      "percent": 3.3
+    },
+    "health_services": {
+      "amount": 3077567,
+      "percent": 1.5
+    },
+    "administration": {
+      "amount": 39762280,
+      "percent": 19.5
+    }
+  },
+  "key_facts": [
+    "The Fiscal Year 2025-2026 budget was adopted on May 13, 2025.",
+    "The mill rate for FY2025-26 is 24.12 mills, a decrease of 5.82 mills from the previous year's 30.66 mills due to revaluation.",
+    "The average residential property parcel is assessed at $277,618, which would generate $6,896 in taxes.",
+    "The Board of Education budget reflects an 8% increase in employee health insurance, reduced from an initially estimated 10%.",
+    "The town maintains a strong unassigned fund balance of $22 million as of the 2023-24 Audit."
+  ],
+  "strengths": [
+    "Commitment to maintaining an Aa1 credit rating, supported by a substantial $22 million unassigned fund balance.",
+    "Proactive in modernizing government with the implementation of a new consumer-friendly online bill-pay system expected to be operational by the next tax payment due date.",
+    "Focus on retaining town employees through competitive and rewarding employment, including negotiated wage increases in collective bargaining agreements."
+  ],
+  "weaknesses": [
+    "Significant increases in operating costs are driven by employee health insurance (8%), debt service (up $137,967), and actuarial pension funding recommendations.",
+    "Prior budget leveling funds (CRRA and ARPA funds) have been exhausted, limiting tools to absorb capital expenditures.",
+    "Downward trends in revenue from sales are noted in both the Water and Sewer Divisions."
+  ]
+}

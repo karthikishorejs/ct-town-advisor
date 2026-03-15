@@ -1,0 +1,53 @@
+{
+  "town": "North Haven",
+  "budget_year": "2025-2026",
+  "total_budget": 137612317,
+  "mill_rate": 29.46,
+  "median_home_price": 350000,
+  "population": 24000,
+  "persona": "The Balanced Budgeter",
+  "persona_description": "North Haven demonstrates a strong commitment to its educational system, allocating nearly half of its budget to schools, while also making significant investments in public safety and infrastructure. Despite facing rising costs in some areas, the town maintains a fiscally responsible approach, balancing its budget and even achieving a notable decrease in the mill rate.",
+  "departments": {
+    "education": {
+      "amount": 68495858,
+      "percent": 49.8
+    },
+    "public_safety": {
+      "amount": 17169854,
+      "percent": 12.5
+    },
+    "infrastructure": {
+      "amount": 11580291,
+      "percent": 8.4
+    },
+    "debt_service": {
+      "amount": 10514000,
+      "percent": 7.6
+    },
+    "health_services": {
+      "amount": 1996854,
+      "percent": 1.5
+    },
+    "administration": {
+      "amount": 27855460,
+      "percent": 20.2
+    }
+  },
+  "key_facts": [
+    "Education comprises nearly half (49.8%) of the total budget, reflecting a strong community commitment to schools.",
+    "The total recommended budget for FY 2025-2026 is 137,612,317, marking a 7.0% increase from the prior fiscal year.",
+    "The mill rate is projected to decrease by 15.0% to 29.46, offering potential tax relief to residents.",
+    "Significant investments are planned for infrastructure and public safety, including capital expenditures and a substantial portion of the budget dedicated to these areas.",
+    "Total revenues match total financing requirements, indicating a balanced budget for the fiscal year."
+  ],
+  "strengths": [
+    "A substantial portion of the budget is dedicated to education, indicating a strong commitment to the town's schools.",
+    "The projected decrease in the mill rate offers potential tax relief for residents.",
+    "A balanced budget, with total revenues matching financing requirements, demonstrates fiscal responsibility."
+  ],
+  "weaknesses": [
+    "Several General Government and Public Safety departments show significant budget increases, with some exceeding 17% (e.g., Election at 58%, Police Shift Differential at 226%).",
+    "Rising electricity fees, special education expenditures, and transportation costs pose ongoing challenges for the Board of Education's budget.",
+    "The postponement of certain capital projects, such as HVAC assessments for elementary schools, could lead to future deferred maintenance issues."
+  ]
+}
