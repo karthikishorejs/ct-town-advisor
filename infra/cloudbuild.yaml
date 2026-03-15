@@ -36,6 +36,21 @@ steps:
       # GOOGLE_API_KEY is pulled from Secret Manager — never baked into the image
       - --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest
 
+  # ── Step 4: Explicitly grant allUsers run.invoker ─────────────────────────
+  # --allow-unauthenticated sets the flag but doesn't always apply the IAM
+  # binding on gen-lang-client projects. This step ensures public access.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: allow-public
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - add-iam-policy-binding
+      - ct-town-advisor
+      - --region=us-central1
+      - --member=allUsers
+      - --role=roles/run.invoker
+
 # Keep the pushed image tagged in Artifact Registry
 images:
   - gcr.io/$PROJECT_ID/ct-town-advisor:$BUILD_ID

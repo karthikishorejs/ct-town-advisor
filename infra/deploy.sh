@@ -95,7 +95,19 @@ gcloud builds submit \
   --project="${PROJECT_ID}" \
   .
 
-# ── 6. Print service URL ─────────────────────────────────────────────────────
+# ── 6. Ensure public access (--allow-unauthenticated alone is not enough on
+#       gen-lang-client projects — the IAM binding must be set explicitly) ────
+echo "▶ Granting public access..."
+gcloud run services add-iam-policy-binding "${SERVICE}" \
+  --project="${PROJECT_ID}" \
+  --region="${REGION}" \
+  --member="allUsers" \
+  --role="roles/run.invoker" \
+  --quiet
+echo "✅ Service is publicly accessible."
+echo ""
+
+# ── 7. Print service URL ─────────────────────────────────────────────────────
 SERVICE_URL=$(gcloud run services describe "${SERVICE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
