@@ -61,45 +61,52 @@ async def _send_to_browser(
     session,
     stop: asyncio.Event,
 ) -> None:
-    """Forward audio chunks + transcripts from Gemini Live → browser."""
+    """Forward audio chunks + transcripts from Gemini Live → browser.
+
+    session.receive() is a finite async iterator — it yields messages for
+    one turn and then stops.  The outer while loop re-enters it for every
+    subsequent turn so that Penny can respond to multiple questions without
+    the user having to reconnect.
+    """
     accumulated_transcript = ""
     try:
-        async for response in session.receive():
-            if stop.is_set():
-                break
+        while not stop.is_set():
+            async for response in session.receive():
+                if stop.is_set():
+                    break
 
-            sc = response.server_content
+                sc = response.server_content
 
-            # ── Audio chunks → binary frame ─────────────────────────────
-            if sc and sc.model_turn:
-                for part in sc.model_turn.parts:
-                    if part.inline_data and part.inline_data.data:
-                        await websocket.send_bytes(part.inline_data.data)
+                # ── Audio chunks → binary frame ──────────────────────────
+                if sc and sc.model_turn:
+                    for part in sc.model_turn.parts:
+                        if part.inline_data and part.inline_data.data:
+                            await websocket.send_bytes(part.inline_data.data)
 
-            # Older SDK versions surface audio at top-level response.data
-            if response.data:
-                await websocket.send_bytes(response.data)
+                # Older SDK versions surface audio at top-level response.data
+                if response.data:
+                    await websocket.send_bytes(response.data)
 
-            # ── Output transcription (what Gemini said) ──────────────────
-            if sc and sc.output_transcription:
-                chunk = (sc.output_transcription.text or "").strip()
-                if chunk:
-                    accumulated_transcript += " " + chunk
+                # ── Output transcription (what Gemini said) ───────────────
+                if sc and sc.output_transcription:
+                    chunk = (sc.output_transcription.text or "").strip()
+                    if chunk:
+                        accumulated_transcript += " " + chunk
 
-            # ── Interrupted ──────────────────────────────────────────────
-            if sc and getattr(sc, "interrupted", False):
-                accumulated_transcript = ""
-                await websocket.send_text(
-                    json.dumps({"type": "interrupted"})
-                )
+                # ── Interrupted ───────────────────────────────────────────
+                if sc and getattr(sc, "interrupted", False):
+                    accumulated_transcript = ""
+                    await websocket.send_text(
+                        json.dumps({"type": "interrupted"})
+                    )
 
-            # ── Turn complete → send transcript ──────────────────────────
-            if sc and sc.turn_complete:
-                transcript = accumulated_transcript.strip()
-                accumulated_transcript = ""
-                await websocket.send_text(
-                    json.dumps({"type": "turn_complete", "text": transcript})
-                )
+                # ── Turn complete → send transcript ───────────────────────
+                if sc and sc.turn_complete:
+                    transcript = accumulated_transcript.strip()
+                    accumulated_transcript = ""
+                    await websocket.send_text(
+                        json.dumps({"type": "turn_complete", "text": transcript})
+                    )
 
     except (WebSocketDisconnect, RuntimeError):
         pass
