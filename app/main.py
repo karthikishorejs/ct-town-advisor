@@ -320,13 +320,16 @@ def _init_session_state() -> None:
         "waiting_response":    False,
         "last_voice_turn_id":  -1,   # dedup WebSocket voice turns
         "pending_audio":       None,  # WAV bytes queued for playback
+        "tts_thread":          None,  # background TTS thread (or None)
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-    # Queue must be created separately (new object each script run, but guarded)
+    # Queues must be created separately (new object each script run, but guarded)
     if "update_queue" not in st.session_state:
         st.session_state.update_queue = queue.Queue()
+    if "tts_queue" not in st.session_state:
+        st.session_state.tts_queue = queue.Queue()
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +402,22 @@ def _drain_queue() -> bool:
             st.session_state.agent_state = "interrupted"
             st.session_state.waiting_response = False
             changed = True
+
+    # ── Drain TTS audio queue (background thread → main thread) ──────
+    tts_q: queue.Queue = st.session_state.tts_queue
+    while not tts_q.empty():
+        try:
+            wav = tts_q.get_nowait()
+            st.session_state.pending_audio = wav
+            changed = True
+        except queue.Empty:
+            break
+
+    # Clear tts_thread ref once it's done
+    tts_t = st.session_state.get("tts_thread")
+    if tts_t is not None and not tts_t.is_alive():
+        st.session_state.tts_thread = None
+
     return changed
 
 
@@ -427,51 +446,117 @@ def _apply_ui_update(ui: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini TTS — speak text in Penny's voice via Live API
+# Gemini TTS — persistent Live API session for fast text-to-speech
 # ---------------------------------------------------------------------------
+#
+# Opening a new Gemini Live WebSocket per TTS call costs ~3-5 s just for
+# the handshake.  We keep a SINGLE persistent session alive across calls
+# on a dedicated background event loop.  First call still pays the setup,
+# but subsequent calls skip it and only wait for audio generation (~2-4 s).
+# If the session dies (timeout, network error), it reconnects automatically.
+#
+# Thread model:
+#   _tts_event_loop  — runs forever in a daemon thread
+#   _tts_session     — Gemini Live session living on that loop
+#   _generate_penny_audio()  — called from ANY thread; submits a coroutine
+#                              to the loop and waits for the result.
 
 LIVE_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
 
+_TTS_SYSTEM_INSTRUCTION = (
+    "You are Penny, a warm Connecticut Town Advisor. "
+    "Read the following text aloud in a friendly, natural tone. "
+    "Say ONLY what is given — do not add or change anything."
+)
 
-async def _tts_via_gemini(text: str) -> bytes | None:
-    """Send text to Gemini Live API and return WAV audio bytes."""
+# ── Persistent event loop (one per process) ────────────────────────────────
+
+_tts_event_loop: asyncio.AbstractEventLoop | None = None
+_tts_loop_lock = threading.Lock()
+
+
+def _ensure_tts_loop() -> asyncio.AbstractEventLoop:
+    """Return the persistent TTS event loop, creating it if needed."""
+    global _tts_event_loop
+    with _tts_loop_lock:
+        if _tts_event_loop is None or _tts_event_loop.is_closed():
+            _tts_event_loop = asyncio.new_event_loop()
+            t = threading.Thread(
+                target=_tts_event_loop.run_forever,
+                daemon=True,
+                name="TTS-EventLoop",
+            )
+            t.start()
+            print("[tts] event loop started")
+    return _tts_event_loop
+
+
+# ── Persistent Gemini Live session (lives on the event loop) ───────────────
+
+_live_session = None
+_live_cm = None  # async context manager returned by connect()
+
+
+async def _get_or_create_session():
+    """Return the live TTS session, connecting if needed."""
+    global _live_session, _live_cm
+
+    if _live_session is not None:
+        return _live_session
+
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    config = types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        system_instruction=types.Content(
+            role="system",
+            parts=[types.Part(text=_TTS_SYSTEM_INSTRUCTION)],
+        ),
+    )
+    print("[tts] connecting to Gemini Live…")
+    _live_cm = client.aio.live.connect(model=LIVE_MODEL, config=config)
+    _live_session = await _live_cm.__aenter__()
+    print("[tts] Gemini Live session ready ✓")
+    return _live_session
+
+
+async def _close_tts_session():
+    """Tear down the live session so the next call reconnects."""
+    global _live_session, _live_cm
+    if _live_cm is not None:
+        try:
+            await _live_cm.__aexit__(None, None, None)
+        except Exception:
+            pass
+    _live_session = None
+    _live_cm = None
+
+
+async def _tts_generate(text: str) -> bytes | None:
+    """Send text to the persistent Live session and return WAV bytes."""
+    global _live_session
+
+    session = await _get_or_create_session()
     try:
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-        config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            system_instruction=types.Content(
-                role="system",
-                parts=[types.Part(text=(
-                    "You are Penny, a warm Connecticut Town Advisor. "
-                    "Read the following text aloud in a friendly, natural tone. "
-                    "Say ONLY what is given — do not add or change anything."
-                ))],
-            ),
+        await session.send_client_content(
+            turns=[types.Content(
+                role="user",
+                parts=[types.Part(text=f"Read this aloud: {text}")],
+            )],
+            turn_complete=True,
         )
         audio_chunks: list[bytes] = []
-        async with client.aio.live.connect(
-            model=LIVE_MODEL, config=config
-        ) as session:
-            await session.send_client_content(
-                turns=[types.Content(
-                    role="user",
-                    parts=[types.Part(text=f"Read this aloud: {text}")],
-                )],
-                turn_complete=True,
-            )
-            async for response in session.receive():
-                sc = response.server_content
-                if sc and sc.model_turn:
-                    for part in sc.model_turn.parts:
-                        if part.inline_data and part.inline_data.data:
-                            audio_chunks.append(part.inline_data.data)
-                if sc and sc.turn_complete:
-                    break
+        async for response in session.receive():
+            sc = response.server_content
+            if sc and sc.model_turn:
+                for part in sc.model_turn.parts:
+                    if part.inline_data and part.inline_data.data:
+                        audio_chunks.append(part.inline_data.data)
+            if sc and sc.turn_complete:
+                break
 
         if not audio_chunks:
             return None
 
-        # Concatenate PCM and wrap in WAV (24 kHz, mono, 16-bit)
         pcm = b"".join(audio_chunks)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
@@ -480,20 +565,71 @@ async def _tts_via_gemini(text: str) -> bytes | None:
             wf.setframerate(24000)
             wf.writeframes(pcm)
         return buf.getvalue()
+
     except Exception as exc:
-        print(f"[tts] Gemini TTS failed: {exc}")
+        print(f"[tts] session error ({exc}) — will reconnect next time")
+        await _close_tts_session()
         return None
 
+
+# ── Public API (callable from any thread) ──────────────────────────────────
 
 def _generate_penny_audio(text: str) -> bytes | None:
-    """Blocking wrapper — runs the async TTS in a fresh event loop."""
+    """Generate Penny's voice audio.  Reuses persistent Live API session."""
     if not text or len(text) < 5:
         return None
-    loop = asyncio.new_event_loop()
+    loop = _ensure_tts_loop()
+    future = asyncio.run_coroutine_threadsafe(_tts_generate(text), loop)
     try:
-        return loop.run_until_complete(_tts_via_gemini(text))
-    finally:
-        loop.close()
+        return future.result(timeout=30)
+    except Exception as exc:
+        print(f"[tts] generation failed: {exc}")
+        return None
+
+
+def _prewarm_tts() -> None:
+    """Open the Live session in the background so the first TTS call is fast."""
+    loop = _ensure_tts_loop()
+    asyncio.run_coroutine_threadsafe(_get_or_create_session(), loop)
+
+
+# Pre-warm at import time — session will be ready by the time the user clicks
+_prewarm_tts()
+
+
+# ── Background TTS worker (non-blocking for Streamlit render) ──────────────
+
+def _tts_background_worker(text: str, tts_q: queue.Queue) -> None:
+    """Background thread: generates Penny's audio and puts it on a queue.
+
+    Uses a thread-safe queue (NOT st.session_state) because Streamlit's
+    session state is not safely writable from background threads.
+    The main render loop drains tts_q and plays the audio.
+    """
+    try:
+        wav = _generate_penny_audio(text)
+        if wav:
+            tts_q.put(wav)
+            print(f"[tts-bg] audio ready ({len(wav):,} bytes)")
+        else:
+            print("[tts-bg] no audio returned")
+    except Exception as exc:
+        print(f"[tts-bg] failed: {exc}")
+
+
+def _start_tts_background(text: str) -> None:
+    """Kick off TTS generation in a daemon thread (non-blocking)."""
+    if not text or len(text) < 5:
+        return
+    tts_q: queue.Queue = st.session_state.tts_queue
+    t = threading.Thread(
+        target=_tts_background_worker,
+        args=(text, tts_q),
+        daemon=True,
+        name="PennyTTS",
+    )
+    t.start()
+    st.session_state.tts_thread = t
 
 
 # ---------------------------------------------------------------------------
@@ -575,10 +711,9 @@ def _direct_generate(query: str) -> None:
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": voice}
             )
-            # Generate Penny's voice audio via Gemini Live API
-            wav = _generate_penny_audio(voice)
-            if wav:
-                st.session_state.pending_audio = wav
+            # Generate Penny's voice audio in background thread —
+            # text + charts appear immediately, audio plays when ready.
+            _start_tts_background(voice)
         if ui:
             _apply_ui_update(ui)
     except Exception as exc:
@@ -778,9 +913,17 @@ def _render_persona_card(town_name: str | None) -> None:
 
     # Embed avatar as base64 so the whole card is one HTML block,
     # keeping flexbox layout intact (multi-call approach breaks flex).
+    # Cache the base64 strings in session state to avoid re-reading the
+    # file on every Streamlit render (the polling loop re-renders every
+    # 0.3 s and will exhaust OS file descriptors otherwise).
     img_html = ""
     if avatar and avatar.exists():
-        img_b64 = base64.b64encode(avatar.read_bytes()).decode()
+        cache_key = f"_avatar_b64_{town_name}"
+        if cache_key not in st.session_state:
+            st.session_state[cache_key] = base64.b64encode(
+                avatar.read_bytes()
+            ).decode()
+        img_b64 = st.session_state[cache_key]
         img_html = (
             f'<img src="data:image/png;base64,{img_b64}" '
             f'width="150" style="border-radius:12px;margin-bottom:8px" />'
@@ -1139,9 +1282,12 @@ def main() -> None:
             )
             _render_listings(st.session_state.active_town)
 
-    # ── Polling — keep UI live while agent is active ───────────────────────
+    # ── Polling — keep UI live while agent is active or TTS is generating ──
+    tts_t = st.session_state.get("tts_thread")
+    tts_running = tts_t is not None and tts_t.is_alive()
     if st.session_state.waiting_response or \
-       st.session_state.agent_state in ("thinking", "speaking"):
+       st.session_state.agent_state in ("thinking", "speaking") or \
+       tts_running:
         time.sleep(0.3)
         st.rerun()
 
