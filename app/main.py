@@ -14,16 +14,13 @@ Run with:
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import io
 import json
 import os
 import queue
 import sys
 import threading
 import time
-import wave  # noqa: E402 — stdlib, used for WAV packaging
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -40,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.context_builder import SYSTEM_PROMPT, build_context, get_all_towns, get_town_data
 from src.live_agent import PennyAgent
+from src import tts_session
 
 # Streamlit custom component: browser WebSocket audio (Cloud Run voice path)
 _AUDIO_COMPONENT_PATH = ROOT / "app" / "components" / "audio_component"
@@ -321,6 +319,7 @@ def _init_session_state() -> None:
         "last_voice_turn_id":  -1,   # dedup WebSocket voice turns
         "pending_audio":       None,  # WAV bytes queued for playback
         "tts_thread":          None,  # background TTS thread (or None)
+        "listings_opened":     None,  # town name whose Zillow page was auto-opened
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -439,6 +438,10 @@ def _apply_ui_update(ui: dict) -> None:
             # Clamp to slider range
             price = max(100_000, min(1_000_000, price))
             st.session_state.calculator_home_price = price
+            # Also update the slider widget's own key — Streamlit ignores the
+            # value= parameter once the key exists in session_state, so we must
+            # write directly to "calc_price" to move the slider handle.
+            st.session_state["calc_price"] = price
         except (ValueError, TypeError):
             pass
     if ui.get("show_listings"):
@@ -446,175 +449,14 @@ def _apply_ui_update(ui: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini TTS — persistent Live API session for fast text-to-speech
+# Gemini TTS — delegated to src/tts_session.py (persistent session)
 # ---------------------------------------------------------------------------
-#
-# Opening a new Gemini Live WebSocket per TTS call costs ~3-5 s just for
-# the handshake.  We keep a SINGLE persistent session alive across calls
-# on a dedicated background event loop.  First call still pays the setup,
-# but subsequent calls skip it and only wait for audio generation (~2-4 s).
-# If the session dies (timeout, network error), it reconnects automatically.
-#
-# Thread model:
-#   _tts_event_loop  — runs forever in a daemon thread
-#   _tts_session     — Gemini Live session living on that loop
-#   _generate_penny_audio()  — called from ANY thread; submits a coroutine
-#                              to the loop and waits for the result.
+# The persistent event loop + Gemini Live session live in src/tts_session.py,
+# which is an *imported* module.  Python caches imports, so its module-level
+# globals (event loop, session) survive Streamlit's script re-executions.
+# If they lived here in app/main.py, they'd leak on every 0.3 s rerun.
 
 LIVE_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
-
-_TTS_SYSTEM_INSTRUCTION = (
-    "You are Penny, a warm Connecticut Town Advisor. "
-    "Read the following text aloud in a friendly, natural tone. "
-    "Say ONLY what is given — do not add or change anything."
-)
-
-# ── Persistent event loop (one per process) ────────────────────────────────
-
-_tts_event_loop: asyncio.AbstractEventLoop | None = None
-_tts_loop_lock = threading.Lock()
-
-
-def _ensure_tts_loop() -> asyncio.AbstractEventLoop:
-    """Return the persistent TTS event loop, creating it if needed."""
-    global _tts_event_loop
-    with _tts_loop_lock:
-        if _tts_event_loop is None or _tts_event_loop.is_closed():
-            _tts_event_loop = asyncio.new_event_loop()
-            t = threading.Thread(
-                target=_tts_event_loop.run_forever,
-                daemon=True,
-                name="TTS-EventLoop",
-            )
-            t.start()
-            print("[tts] event loop started")
-    return _tts_event_loop
-
-
-# ── Persistent Gemini Live session (lives on the event loop) ───────────────
-
-_live_session = None
-_live_cm = None  # async context manager returned by connect()
-
-
-async def _get_or_create_session():
-    """Return the live TTS session, connecting if needed."""
-    global _live_session, _live_cm
-
-    if _live_session is not None:
-        return _live_session
-
-    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-    config = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        system_instruction=types.Content(
-            role="system",
-            parts=[types.Part(text=_TTS_SYSTEM_INSTRUCTION)],
-        ),
-    )
-    print("[tts] connecting to Gemini Live…")
-    _live_cm = client.aio.live.connect(model=LIVE_MODEL, config=config)
-    _live_session = await _live_cm.__aenter__()
-    print("[tts] Gemini Live session ready ✓")
-    return _live_session
-
-
-async def _close_tts_session():
-    """Tear down the live session so the next call reconnects."""
-    global _live_session, _live_cm
-    if _live_cm is not None:
-        try:
-            await _live_cm.__aexit__(None, None, None)
-        except Exception:
-            pass
-    _live_session = None
-    _live_cm = None
-
-
-async def _tts_generate(text: str) -> bytes | None:
-    """Send text to the persistent Live session and return WAV bytes."""
-    global _live_session
-
-    session = await _get_or_create_session()
-    try:
-        await session.send_client_content(
-            turns=[types.Content(
-                role="user",
-                parts=[types.Part(text=f"Read this aloud: {text}")],
-            )],
-            turn_complete=True,
-        )
-        audio_chunks: list[bytes] = []
-        async for response in session.receive():
-            sc = response.server_content
-            if sc and sc.model_turn:
-                for part in sc.model_turn.parts:
-                    if part.inline_data and part.inline_data.data:
-                        audio_chunks.append(part.inline_data.data)
-            if sc and sc.turn_complete:
-                break
-
-        if not audio_chunks:
-            return None
-
-        pcm = b"".join(audio_chunks)
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(24000)
-            wf.writeframes(pcm)
-        return buf.getvalue()
-
-    except Exception as exc:
-        print(f"[tts] session error ({exc}) — will reconnect next time")
-        await _close_tts_session()
-        return None
-
-
-# ── Public API (callable from any thread) ──────────────────────────────────
-
-def _generate_penny_audio(text: str) -> bytes | None:
-    """Generate Penny's voice audio.  Reuses persistent Live API session."""
-    if not text or len(text) < 5:
-        return None
-    loop = _ensure_tts_loop()
-    future = asyncio.run_coroutine_threadsafe(_tts_generate(text), loop)
-    try:
-        return future.result(timeout=30)
-    except Exception as exc:
-        print(f"[tts] generation failed: {exc}")
-        return None
-
-
-def _prewarm_tts() -> None:
-    """Open the Live session in the background so the first TTS call is fast."""
-    loop = _ensure_tts_loop()
-    asyncio.run_coroutine_threadsafe(_get_or_create_session(), loop)
-
-
-# Pre-warm at import time — session will be ready by the time the user clicks
-_prewarm_tts()
-
-
-# ── Background TTS worker (non-blocking for Streamlit render) ──────────────
-
-def _tts_background_worker(text: str, tts_q: queue.Queue) -> None:
-    """Background thread: generates Penny's audio and puts it on a queue.
-
-    Uses a thread-safe queue (NOT st.session_state) because Streamlit's
-    session state is not safely writable from background threads.
-    The main render loop drains tts_q and plays the audio.
-    """
-    try:
-        wav = _generate_penny_audio(text)
-        if wav:
-            tts_q.put(wav)
-            print(f"[tts-bg] audio ready ({len(wav):,} bytes)")
-        else:
-            print("[tts-bg] no audio returned")
-    except Exception as exc:
-        print(f"[tts-bg] failed: {exc}")
 
 
 def _start_tts_background(text: str) -> None:
@@ -622,13 +464,7 @@ def _start_tts_background(text: str) -> None:
     if not text or len(text) < 5:
         return
     tts_q: queue.Queue = st.session_state.tts_queue
-    t = threading.Thread(
-        target=_tts_background_worker,
-        args=(text, tts_q),
-        daemon=True,
-        name="PennyTTS",
-    )
-    t.start()
+    t = tts_session.start_background(text, tts_q)
     st.session_state.tts_thread = t
 
 
@@ -707,6 +543,10 @@ def _direct_generate(query: str) -> None:
         penny = json.loads(response.text)
         voice = penny.get("voice_response", "")
         ui    = penny.get("ui_update", {})
+        print(f"[penny] ui_update: active_town={ui.get('active_town')}, "
+              f"calculator_home_price={ui.get('calculator_home_price')}, "
+              f"show_calculator={ui.get('show_calculator')}, "
+              f"show_listings={ui.get('show_listings')}")
         if voice:
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": voice}
@@ -1281,6 +1121,22 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
             _render_listings(st.session_state.active_town)
+
+            # Auto-open Zillow in a new tab the first time a town's listings
+            # are shown.  Gate on listings_opened so we don't re-fire on every
+            # 0.3 s polling rerun.
+            _active = st.session_state.active_town
+            _already = st.session_state.get("listings_opened")
+            if _active and _active != _already and _active in _ZILLOW_SLUGS:
+                _slug = _ZILLOW_SLUGS[_active]
+                _url  = f"https://www.zillow.com/{_slug}/"
+                st_components.html(
+                    f'<script>window.open("{_url}", "_blank", '
+                    f'"noopener,noreferrer");</script>',
+                    height=0,
+                )
+                st.session_state.listings_opened = _active
+                print(f"[listings] auto-opened Zillow for {_active}: {_url}")
 
     # ── Polling — keep UI live while agent is active or TTS is generating ──
     tts_t = st.session_state.get("tts_thread")

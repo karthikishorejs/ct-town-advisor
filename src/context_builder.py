@@ -145,6 +145,19 @@ that are not in the data below.
 ## Town data (authoritative — use only these numbers)
 {town_blocks}
 
+## Connecticut property tax formula
+Connecticut law requires properties to be assessed at 70% of fair market value.
+  assessed_value = home_price × 0.70
+  annual_tax     = assessed_value × mill_rate / 1000   (round down to nearest $1)
+
+Example — $500,000 home in Wallingford (mill rate 24.12):
+  assessed = 500000 × 0.70 = 350000
+  annual   = 350000 × 24.12 / 1000 = $8,442
+  monthly  = $8,442 / 12 = $703
+
+Always compute the exact tax using this formula when a home price is given. \
+Never say "the exact calculation isn't specified" — it always is.
+
 ## CRITICAL: Response format
 You MUST ALWAYS respond with a valid JSON object and nothing else — no prose \
 outside the JSON, no markdown fences. Use exactly this structure:
@@ -161,8 +174,12 @@ figures.
 set show_listings to true.
 5. When the user asks about taxes, mill rate, or property tax calculations, \
 set show_calculator to true. If the user mentions a specific home price \
-(e.g. "$500k", "500000", "a 500k home"), set calculator_home_price to that \
-number as an integer (e.g. 500000).
+(e.g. "$500k", "500000", "a 500k home"), ALWAYS: (a) compute the exact annual \
+tax using the CT formula above and state it in voice_response, (b) set \
+calculator_home_price to the FAIR MARKET VALUE the user mentioned — this is \
+the home price BEFORE applying the 70% ratio (e.g. if the user says "$500k", \
+set calculator_home_price to 500000, NOT 350000). Never reference the average \
+assessed home when the user gave a specific price.
 6. highlight_towns must list every town mentioned in your response.
 7. active_town: ALWAYS set this to a town name — never null.  For every \
 question, pick the most relevant or standout town.  For "best town for …" \
