@@ -1,4 +1,4 @@
-# 🏠 Penny — CT Town Advisor
+# 🏠 Penny - CT Town Advisor
 
 A voice-enabled AI advisor for Connecticut towns, built with **Gemini Live API**, **Streamlit**, **FastAPI**, and **Plotly**. Penny helps residents decide where to live in CT by explaining town budgets, taxes, and services — by voice or text — with real-time charts, interactive maps, and tax calculators, all grounded in official budget documents.
 
